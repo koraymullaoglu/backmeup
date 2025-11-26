@@ -20,6 +20,10 @@ CONFIG_DIR="${HOME}/.config/backmeup"
 CONFIG_FILE="${CONFIG_DIR}/backups.conf"
 SCRIPT_PATH=""
 
+if [[ -f "${SCRIPT_DIR}/logger.sh" ]]; then
+    source "${SCRIPT_DIR}/logger.sh"
+fi
+
 if [[ -f "${SCRIPT_DIR}/ssh_utils.sh" ]]; then
     source "${SCRIPT_DIR}/ssh_utils.sh"
 fi
@@ -265,6 +269,7 @@ cat > "$script_path" << 'TEMPLATE_EOF'
 #!/usr/bin/env bash
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="/usr/local/lib/backmeup"
 SOURCE="SOURCE_DIR_PLACEHOLDER"
 OUTPUT="OUTPUT_DIR_PLACEHOLDER"
 BACKUP_COUNT="BACKUP_COUNT_PLACEHOLDER"
@@ -277,7 +282,7 @@ DELETE_AFTER="DELETE_AFTER_PLACEHOLDER"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_FILE="${SCRIPT_DIR}/backup.log"
 
-source /usr/local/lib/backmeup/logger.sh
+source "${LIB_DIR}/logger.sh"
 
 declare -A COMPRESSION_MAP=(
     ["tar.gz"]=".tar.gz|z"
@@ -288,6 +293,23 @@ declare -A COMPRESSION_MAP=(
 
 IFS='|' read -r EXT FLAG <<< "${COMPRESSION_MAP[$COMPRESSION]:-".tar.gz|z"}"
 BACKUP_FILE="${OUTPUT}/$(basename "$SOURCE")_${TIMESTAMP}${EXT}"
+
+if [[ ! -f "$LOG_FILE" ]] || [[ ! -s "$LOG_FILE" ]] || ! grep -q "Backup configuration initialized" "$LOG_FILE" 2>/dev/null; then
+    logger "INFO" "========================================" "$LOG_FILE"
+    logger "INFO" "Backup configuration initialized" "$LOG_FILE"
+    logger "INFO" "Source directory: $SOURCE" "$LOG_FILE"
+    logger "INFO" "Output directory: $OUTPUT" "$LOG_FILE"
+    logger "INFO" "Compression method: $COMPRESSION" "$LOG_FILE"
+    logger "INFO" "Backup retention count: $BACKUP_COUNT" "$LOG_FILE"
+    if [[ "$REMOTE_ENABLED" == "true" ]]; then
+        logger "INFO" "Remote backup enabled: ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}" "$LOG_FILE"
+        if [[ "$DELETE_AFTER" == "true" ]]; then
+            logger "INFO" "Local deletion after remote transfer: enabled" "$LOG_FILE"
+        fi
+    fi
+    logger "INFO" "========================================" "$LOG_FILE"
+fi
+
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting backup: $SOURCE"
 logger "INFO" "Starting backup of $SOURCE to $BACKUP_FILE" "$LOG_FILE"
 
@@ -845,6 +867,14 @@ update_backup() {
     save_backup_config "$backup_name" "$source" "$output" "$script" "$new_schedule" "$new_count" "$compression" "$remote_enabled" "$remote_user" "$remote_host" "$remote_path" "$delete_after"
     
     log_success "Backup '$backup_name' updated successfully"
+
+    local log_file="${source}/.backmeup/backup.log"
+    if [[ -f "$log_file" ]]; then
+        if [[ -f "${SCRIPT_DIR}/logger.sh" ]]; then            
+            logger "UPDATE" "Updated backup '$backup_name': Schedule '$new_schedule', Keep '$new_count'" "$log_file"
+        fi
+    fi
+
     echo "  Schedule: $new_schedule"
     echo "  Keep: $new_count backups"
     if [[ "$remote_enabled" == "true" ]]; then
@@ -888,6 +918,7 @@ delete_backup() {
     bash "${SCRIPT_DIR}/cron.sh" remove "${backup_name}" 2>/dev/null || true
     remove_backup_config "$backup_name"
     log_success "Backup '$backup_name' deleted successfully"
+    logger "DELETE" "Deleted backup '$backup_name'" "${source}/.backmeup/backup.log"
     
     if [[ "$remote_enabled" == "true" ]]; then
         echo ""
